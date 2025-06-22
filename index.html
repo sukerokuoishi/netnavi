@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Normal Navi - 3D Conversational Character</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        
+        #renderCanvas {
+            width: 100%;
+            height: 100vh;
+            display: block;
+        }
+        
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            max-width: 300px;
+        }
+        
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .config {
+            margin-bottom: 20px;
+        }
+        
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.9);
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .recording {
+            background: #f44336 !important;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        .emotion-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 24px;
+            min-width: 60px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    
+    <div class="ui-overlay">
+        <div class="config">
+            <label for="webhookUrl">Miibo Webhook URL:</label>
+            <input type="text" id="webhookUrl" placeholder="https://your-webhook-url">
+            
+            <label for="secretKey">Secret Key:</label>
+            <input type="password" id="secretKey" placeholder="Your secret key">
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">音声入力開始</button>
+            <button id="stopButton" disabled>音声入力停止</button>
+        </div>
+        
+        <div class="status" id="status">
+            音声認識の準備ができました
+        </div>
+    </div>
+    
+    <div class="emotion-indicator" id="emotionIndicator">😊</div>
+
+    <!-- Babylon.js -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="pmx-loader.js"></script>
+    
+    <script>
+        class NormalNaviApp {
+            constructor() {
+                this.engine = null;
+                this.scene = null;
+                this.model = null;
+                this.camera = null;
+                this.recognition = null;
+                this.synthesis = window.speechSynthesis;
+                this.isListening = false;
+                this.currentEmotion = '楽';
+                
+                this.emotionEmojis = {
+                    '喜': '😊',
+                    '怒': '😠', 
+                    '哀': '😢',
+                    '楽': '😄'
+                };
+                
+                this.init();
+            }
+            
+            async init() {
+                this.setupBabylon();
+                this.setupSpeechRecognition();
+                this.setupEventListeners();
+                await this.loadModel();
+                this.startRenderLoop();
+            }
+            
+            setupBabylon() {
+                const canvas = document.getElementById('renderCanvas');
+                this.engine = new BABYLON.Engine(canvas, true);
+                this.scene = new BABYLON.Scene(this.engine);
+                
+                // カメラ設定
+                this.camera = new BABYLON.ArcRotateCamera(
+                    "camera", 
+                    Math.PI / 2, 
+                    Math.PI / 2, 
+                    3, 
+                    BABYLON.Vector3.Zero(), 
+                    this.scene
+                );
+                this.camera.attachControls(canvas, true);
+                
+                // ライト設定
+                const light = new BABYLON.HemisphericLight(
+                    "light", 
+                    new BABYLON.Vector3(0, 1, 0), 
+                    this.scene
+                );
+                light.intensity = 0.8;
+                
+                const directionalLight = new BABYLON.DirectionalLight(
+                    "dirLight", 
+                    new BABYLON.Vector3(0, -1, 0), 
+                    this.scene
+                );
+                directionalLight.position = new BABYLON.Vector3(0, 5, -5);
+                
+                // 背景色
+                this.scene.createDefaultSkybox(
+                    BABYLON.CubeTexture.CreateFromPrefilteredData("https://playground.babylonjs.com/textures/environment.dds", this.scene), 
+                    true, 
+                    1000, 
+                    0.3
+                );
+            }
+            
+            setupSpeechRecognition() {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    this.recognition = new SpeechRecognition();
+                    
+                    this.recognition.continuous = false;
+                    this.recognition.interimResults = false;
+                    this.recognition.lang = 'ja-JP';
+                    
+                    this.recognition.onstart = () => {
+                        this.updateStatus('音声を聞いています...');
+                        document.getElementById('startButton').classList.add('recording');
+                    };
+                    
+                    this.recognition.onresult = (event) => {
+                        const transcript = event.results[0][0].transcript;
+                        this.updateStatus(`認識: "${transcript}"`);
+                        this.sendToMiibo(transcript);
+                    };
+                    
+                    this.recognition.onerror = (event) => {
+                        this.updateStatus(`エラー: ${event.error}`);
+                        this.stopListening();
+                    };
+                    
+                    this.recognition.onend = () => {
+                        this.stopListening();
+                    };
+                } else {
+                    this.updateStatus('音声認識がサポートされていません');
+                }
+            }
+            
+            setupEventListeners() {
+                document.getElementById('startButton').addEventListener('click', () => {
+                    this.startListening();
+                });
+                
+                document.getElementById('stopButton').addEventListener('click', () => {
+                    this.stopListening();
+                });
+                
+                window.addEventListener('resize', () => {
+                    this.engine.resize();
+                });
+            }
+            
+            async loadModel() {
+                try {
+                    this.updateStatus('3Dモデルを読み込み中...');
+                    
+                    // PMXローダーを使用してnormalnavi.pmxを読み込み
+                    try {
+                        const pmxLoader = new PMXLoader(this.scene);
+                        this.model = await pmxLoader.loadPMX('./model/normalnavi.pmx');
+                        this.updateStatus('PMXモデルの読み込み完了');
+                    } catch (pmxError) {
+                        console.warn('PMX読み込みに失敗、プレースホルダーを使用:', pmxError);
+                        this.updateStatus('PMX読み込み失敗、プレースホルダーを使用');
+                        this.createPlaceholderCharacter();
+                    }
+                    
+                } catch (error) {
+                    console.error('モデル読み込みエラー:', error);
+                    this.updateStatus('モデル読み込みに失敗しました');
+                    this.createPlaceholderCharacter();
+                }
+            }
+            
+            createPlaceholderCharacter() {
+                // 頭部
+                const head = BABYLON.MeshBuilder.CreateSphere("head", {diameter: 0.6}, this.scene);
+                head.position.y = 1.5;
+                
+                // 胴体
+                const body = BABYLON.MeshBuilder.CreateCylinder("body", {height: 1, diameter: 0.5}, this.scene);
+                body.position.y = 0.5;
+                
+                // 腕
+                const leftArm = BABYLON.MeshBuilder.CreateCylinder("leftArm", {height: 0.8, diameter: 0.15}, this.scene);
+                leftArm.position = new BABYLON.Vector3(-0.4, 0.8, 0);
+                leftArm.rotation.z = Math.PI / 6;
+                
+                const rightArm = BABYLON.MeshBuilder.CreateCylinder("rightArm", {height: 0.8, diameter: 0.15}, this.scene);
+                rightArm.position = new BABYLON.Vector3(0.4, 0.8, 0);
+                rightArm.rotation.z = -Math.PI / 6;
+                
+                // 脚
+                const leftLeg = BABYLON.MeshBuilder.CreateCylinder("leftLeg", {height: 1, diameter: 0.2}, this.scene);
+                leftLeg.position = new BABYLON.Vector3(-0.15, -0.5, 0);
+                
+                const rightLeg = BABYLON.MeshBuilder.CreateCylinder("rightLeg", {height: 1, diameter: 0.2}, this.scene);
+                rightLeg.position = new BABYLON.Vector3(0.15, -0.5, 0);
+                
+                // マテリアル
+                const material = new BABYLON.StandardMaterial("charMaterial", this.scene);
+                material.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.4);
+                
+                [head, body, leftArm, rightArm, leftLeg, rightLeg].forEach(mesh => {
+                    mesh.material = material;
+                });
+                
+                // キャラクターグループ作成
+                this.model = new BABYLON.TransformNode("character", this.scene);
+                [head, body, leftArm, rightArm, leftLeg, rightLeg].forEach(mesh => {
+                    mesh.parent = this.model;
+                });
+            }
+            
+            startListening() {
+                if (this.recognition && !this.isListening) {
+                    this.isListening = true;
+                    document.getElementById('startButton').disabled = true;
+                    document.getElementById('stopButton').disabled = false;
+                    this.recognition.start();
+                }
+            }
+            
+            stopListening() {
+                if (this.recognition && this.isListening) {
+                    this.isListening = false;
+                    document.getElementById('startButton').disabled = false;
+                    document.getElementById('startButton').classList.remove('recording');
+                    document.getElementById('stopButton').disabled = true;
+                    this.recognition.stop();
+                    this.updateStatus('音声入力を停止しました');
+                }
+            }
+            
+            async sendToMiibo(text) {
+                const webhookUrl = document.getElementById('webhookUrl').value;
+                const secretKey = document.getElementById('secretKey').value;
+                
+                if (!webhookUrl || !secretKey) {
+                    this.updateStatus('Webhook URLとSecret Keyを入力してください');
+                    return;
+                }
+                
+                try {
+                    this.updateStatus('miiboに送信中...');
+                    
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Secret-Key': secretKey
+                        },
+                        body: JSON.stringify({
+                            message: text,
+                            timestamp: new Date().toISOString()
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        this.handleMiiboResponse(result);
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('Miibo送信エラー:', error);
+                    this.updateStatus(`送信エラー: ${error.message}`);
+                }
+            }
+            
+            handleMiiboResponse(response) {
+                // レスポンステキストから感情を抽出
+                let responseText = response.message || response.text || '';
+                let emotion = '楽'; // デフォルト
+                
+                const emotions = ['喜', '怒', '哀', '楽'];
+                for (const emo of emotions) {
+                    if (responseText.includes(emo)) {
+                        emotion = emo;
+                        // 感情文字を除去
+                        responseText = responseText.replace(emo, '').trim();
+                        break;
+                    }
+                }
+                
+                this.currentEmotion = emotion;
+                this.updateEmotionIndicator();
+                this.animateCharacter(emotion);
+                this.speak(responseText);
+                
+                this.updateStatus(`応答: "${responseText}" (感情: ${emotion})`);
+            }
+            
+            updateEmotionIndicator() {
+                const indicator = document.getElementById('emotionIndicator');
+                indicator.textContent = this.emotionEmojis[this.currentEmotion];
+                
+                // アニメーション効果
+                indicator.style.transform = 'scale(1.2)';
+                setTimeout(() => {
+                    indicator.style.transform = 'scale(1)';
+                }, 200);
+            }
+            
+            animateCharacter(emotion) {
+                if (!this.model) return;
+                
+                // 感情に基づくアニメーション
+                const animations = {
+                    '喜': () => {
+                        // 嬉しい動き - 跳ねる
+                        BABYLON.Animation.CreateAndStartAnimation(
+                            "happyJump", this.model, "position.y", 30, 30,
+                            0, 0.3, BABYLON.Animation.ANIMATIONLOOPMODE_YOYO
+                        );
+                    },
+                    '怒': () => {
+                        // 怒りの動き - 震える
+                        BABYLON.Animation.CreateAndStartAnimation(
+                            "angryShake", this.model, "rotation.z", 60, 30,
+                            0, 0.1, BABYLON.Animation.ANIMATIONLOOPMODE_YOYO
+                        );
+                    },
+                    '哀': () => {
+                        // 悲しい動き - うつむく
+                        BABYLON.Animation.CreateAndStartAnimation(
+                            "sadBow", this.model, "rotation.x", 30, 60,
+                            0, 0.2, BABYLON.Animation.ANIMATIONLOOPMODE_YOYO
+                        );
+                    },
+                    '楽': () => {
+                        // 楽しい動き - 回転
+                        BABYLON.Animation.CreateAndStartAnimation(
+                            "funSpin", this.model, "rotation.y", 30, 60,
+                            0, Math.PI * 2, BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE
+                        );
+                    }
+                };
+                
+                if (animations[emotion]) {
+                    animations[emotion]();
+                }
+            }
+            
+            speak(text) {
+                // 既存の音声を停止
+                this.synthesis.cancel();
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ja-JP';
+                utterance.rate = 1.0;
+                utterance.pitch = 1.2; // 少し高めの声
+                
+                utterance.onstart = () => {
+                    this.updateStatus('音声出力中...');
+                };
+                
+                utterance.onend = () => {
+                    this.updateStatus('音声出力完了');
+                };
+                
+                utterance.onerror = (event) => {
+                    console.error('音声出力エラー:', event);
+                    this.updateStatus('音声出力エラー');
+                };
+                
+                this.synthesis.speak(utterance);
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+                console.log('Status:', message);
+            }
+            
+            startRenderLoop() {
+                this.engine.runRenderLoop(() => {
+                    this.scene.render();
+                });
+            }
+        }
+        
+        // アプリケーション開始
+        window.addEventListener('DOMContentLoaded', () => {
+            new NormalNaviApp();
+        });
+    </script>
+</body>
+</html>

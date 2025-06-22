@@ -1,0 +1,41 @@
+{
+  "name": "normal-navi-3d",
+  "version": "1.0.0",
+  "description": "3D Conversational Character - Normal Navi from Mega Man Battle Network",
+  "main": "index.html",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "python3 -m http.server 8000",
+    "build": "echo 'Static site - no build process needed'",
+    "deploy:netlify": "zip -r netnavi.zip index.html pmx-loader.js model/ README.md DEPLOYMENT.md",
+    "deploy:vercel": "vercel",
+    "deploy:firebase": "firebase deploy"
+  },
+  "keywords": [
+    "3d",
+    "conversation",
+    "babylon.js",
+    "speech-recognition",
+    "pmx",
+    "mmd",
+    "megaman",
+    "netnavi"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "firebase-tools": "^12.0.0",
+    "vercel": "^28.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/netnavi.git"
+  },
+  "homepage": "https://yourusername.github.io/netnavi/"
+}
